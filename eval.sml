@@ -6,10 +6,10 @@ type svar = string
 type store = sloc * int list
 
 datatype Texp = Tfunc of Texp * Texp  
+              | Tref of Texp
               | Tunit 
               | Tbool 
               | Tint
-              | Tref of Texp
 
 (* Tutte le operazioni conosciute *)
 datatype oper = Add | Sub | Eq
@@ -32,18 +32,18 @@ datatype expr = Boolean of bool
 structure Int = struct
 
     (* Indica che l'expressione è un valore *)
-    fun value (Boolean b)       = true
-      | value (Integer x)       = true
+    fun value (Boolean b)     = true
+      | value (Integer x)     = true
       | value (Fn (t, v, f))  = true
-      | value (Sym x)           = true
-      | value (Skip)            = true
-      | value _                 = false
+      | value (Sym x)         = true
+      | value (Skip)          = true
+      | value _               = false
 
 
     (* Sostituisce l'espressione 'repl' con tutte le istanze di variabile 'var' in 'exp' *)
     fun substitute var repl (Boolean b)         = Boolean b
       | substitute var repl (Integer n)         = Integer n
-      | substitute var repl (Fn (t, x, e))    = Fn (t, x, substitute var repl e)
+      | substitute var repl (Fn (t, x, e))      = Fn (t, x, substitute var repl e)
       | substitute var repl (If (g, t, f))      = If (substitute var repl g, substitute var repl t, substitute var repl f)
       | substitute var repl (Assign (loc, e))   = Assign (loc, substitute var repl e)
       | substitute var repl (While (g, e))      = While (substitute var repl g, substitute var repl e)
@@ -54,11 +54,10 @@ structure Int = struct
       | substitute var repl (Sym x)             = if x = var then repl else (Sym x)
       | substitute var repl Skip                = Skip
 
-
     (* Esegue un singolo step di computazione *)
     fun step (Boolean b,      store) = NONE
       | step (Integer n,      store) = NONE
-      | step (Fn (t, x, e), store) = NONE
+      | step (Fn (t, x, e),   store) = NONE
       | step (Sym x,          store) = NONE (* Se arriviamo a questo punto vuol dire che x è unbound! *)
       | step (Skip,           store) = NONE
 
@@ -125,78 +124,73 @@ structure Int = struct
 
 
     (* Valuta un'espressione con uno store fino a raggiungere un valore costante *)
-    fun eval (exp, store) =
-        case step (exp, store) of SOME((exp', store')) => eval (exp', store')
+    fun evalExpr (exp, store) =
+        case step (exp, store) of SOME((exp', store')) => evalExpr (exp', store')
             | NONE => (exp, store)
 
 end
 
 (* Controlla se l'espressione è ben tipata *)
-structure Typer = struct
+structure TypeChecker = struct
 
-    fun infer gamma (Integer n) = SOME Tint
-      | infer gamma (Boolean b) = SOME Tbool
-      | infer gamma (Skip)      = SOME Tunit
+    fun inferType gamma (Integer n) = SOME Tint
+      | inferType gamma (Boolean b) = SOME Tbool
+      | inferType gamma (Skip)      = SOME Tunit
 
-      | infer gamma (Op (a, oper, b)) = (
-          case (infer gamma a, oper, infer gamma b)
+      | inferType gamma (Op (a, oper, b)) = (
+          case (inferType gamma a, oper, inferType gamma b)
             of (SOME Tint, Add, SOME Tint) => SOME Tint
              | (SOME Tint,  Eq, SOME Tint) => SOME Tbool
              | _ => NONE)
 
-      | infer gamma (If (g, t, f)) = (
-          case (infer gamma g, infer gamma t, infer gamma f) 
+      | inferType gamma (If (g, t, f)) = (
+          case (inferType gamma g, inferType gamma t, inferType gamma f) 
             of (SOME Tbool, SOME t1, SOME t2) => if t1 = t2 then SOME t1 else NONE
              | _ => NONE)
 
-      | infer gamma (Deref x) = (
+      | inferType gamma (Deref x) = (
           case Store.read gamma x
             of SOME (Tref t) => SOME t
              | _ => NONE)
 
-      | infer gamma (Assign (loc, e)) = (
-          case (Store.read gamma loc, infer gamma e)
+      | inferType gamma (Assign (loc, e)) = (
+          case (Store.read gamma loc, inferType gamma e)
             of (SOME (Tref t), SOME t') => if t = t' then SOME Tunit else NONE
              | _ => NONE)
 
-      | infer gamma (Seq (a, b)) = (
-          case (infer gamma a, infer gamma b)
+      | inferType gamma (Seq (a, b)) = (
+          case (inferType gamma a, inferType gamma b)
             of (SOME Tunit, SOME t) => SOME t
              | _ => NONE)
 
-      | infer gamma (While (g, e)) = (
-          case (infer gamma g, infer gamma e)
+      | inferType gamma (While (g, e)) = (
+          case (inferType gamma g, inferType gamma e)
             of (SOME Tbool, SOME Tunit) => SOME Tunit
              | _ => NONE)
 
-      | infer gamma (Fn (t, x, e)) = (
+      | inferType gamma (Fn (t, x, e)) = (
           let val gamma' = Store.insert gamma (x, t) in
-            case infer gamma' e
+            case inferType gamma' e
               of SOME t1 => SOME (Tfunc (t, t1))
                | NONE => NONE
           end)
 
-      | infer gamma (Sym x) = (
+      | inferType gamma (Sym x) = (
           case Store.read gamma x
             of SOME t => SOME t
              | NONE => NONE)
       
-      | infer gamma (App (f, b)) = (
-          case (infer gamma f, infer gamma b)
+      | inferType gamma (App (f, b)) = (
+          case (inferType gamma f, inferType gamma b)
             of (SOME (Tfunc (t1, t2)), SOME t3) => if t1 = t3 then SOME t2 else NONE
              | _ => NONE)
 
-    fun canType expr = 
-      case infer [] expr 
-        of SOME t => true
-         | NONE   => false 
-
 end
 
-(* Int.eval (Seq(Assign("x", Integer 4), Op(Integer 1, Add, Deref "x")), [("x", 1)]); *)
-(* Int.eval (App(Fn("x", Op(Sym "x", Add, Sym "x")), Integer 2), []); *)
+(* Int.evalExpr (Seq(Assign("x", Integer 4), Op(Integer 1, Add, Deref "x")), [("x", 1)]); *)
+(* Int.evalExpr (App(Fn("x", Op(Sym "x", Add, Sym "x")), Integer 2), []); *)
 
-structure Printer = struct
+structure PrettyPrinter = struct
 
   fun printOper Add = "+"
     | printOper Eq  = "="
@@ -217,7 +211,21 @@ structure Printer = struct
     | printExpr (Assign (loc, n)) = loc ^ " := " ^ (printExpr n)
     | printExpr (Seq (a, b))      = (printExpr a) ^ "; " ^ (printExpr b)
     | printExpr (While (g, e))    = "while " ^ (printExpr g) ^ " do " ^ (printExpr e)
-    | printExpr (Fn (t, x, e))  = "fn " ^ x ^ ": " ^ (printType t) ^ " => " ^ (printExpr e)
+    | printExpr (Fn (t, x, e))    = "fn " ^ x ^ ": " ^ (printType t) ^ " => " ^ (printExpr e)
     | printExpr (App (a, b))      = "(" ^ (printExpr a) ^ ") " ^ (printExpr b)
 
 end
+
+
+(* Funzione che accetta un'espressione, controlla se è tipabile, printa il suo tipo
+ * ed in fine la visualizza in un formato comprensibile *)
+fun digest expr = (
+  print ("Espressione: " ^ PrettyPrinter.printExpr expr ^ "\n");
+  case TypeChecker.inferType [] expr
+    of NONE   =>  print "ERRORE: non è tipabile!\n"
+     | SOME t => (print ("Tipo dell'espressione: " ^ (PrettyPrinter.printType t) ^ "\n");
+                  let val (res, store) = Int.evalExpr (expr, []) in
+                    print ("Riduzione: " ^ (PrettyPrinter.printExpr res) ^ "\n")
+                  end))
+
+(* digest (Op(Integer 5, Add, Boolean false)); *)
