@@ -6,7 +6,7 @@ type svar = string
 type store = sloc * int list
 
 datatype Texp = Tfunc of Texp * Texp  
-              | Tref of Texp
+              | Tref  of Texp
               | Tunit 
               | Tbool 
               | Tint
@@ -17,7 +17,7 @@ datatype oper = Add | Sub | Eq
 (* Tutti i possibili costrutti del nostro linguaggio *)
 datatype expr = Boolean of bool
               | Integer of int
-              | Fn    of Texp * svar * expr
+              | Fn      of Texp * svar * expr
               | Sym     of svar
               | Op      of expr * oper * expr
               | If      of expr * expr * expr
