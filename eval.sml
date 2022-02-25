@@ -155,8 +155,9 @@ structure ExprInt = struct
             | step (expr, store) = NONE
 
           (* Continua a ridurre ad applicare le regole di riduzione *)
-          and eval (expr, store) = case step (expr, store) of SOME (expr', store') => eval (expr', store')
-                                                            | NONE => (expr, store)
+          and eval (expr, store) = case step (expr, store) 
+                                     of SOME (expr', store') => eval (expr', store')
+                                      | NONE => (expr, store)
       in
         eval (exp, store)
       end
@@ -176,32 +177,59 @@ structure TypeChecker = struct
           case (inferType gamma a, oper, inferType gamma b)
             of (SOME Tint, Add, SOME Tint) => SOME Tint
              | (SOME Tint,  Eq, SOME Tint) => SOME Tbool
-             | _ => NONE)
+             | _ => NONE
+      )
 
       | inferType gamma (If (g, t, f)) = (
           case (inferType gamma g, inferType gamma t, inferType gamma f) 
             of (SOME Tbool, SOME t1, SOME t2) => if t1 = t2 then SOME t1 else NONE
-             | _ => NONE)
+             | _ => NONE
+      )
 
       | inferType gamma (Deref x) = (
           case Store.read gamma x
             of SOME (Tref t) => SOME t
-             | _ => NONE)
+             | _ => NONE
+      )
 
       | inferType gamma (Assign (loc, e)) = (
           case (Store.read gamma loc, inferType gamma e)
             of (SOME (Tref t), SOME t') => if t = t' then SOME Tunit else NONE
-             | _ => NONE)
+             | _ => NONE
+      )
 
       | inferType gamma (Seq (a, b)) = (
           case (inferType gamma a, inferType gamma b)
             of (SOME Tunit, SOME t) => SOME t
-             | _ => NONE)
+             | _ => NONE
+      )
 
       | inferType gamma (While (g, e)) = (
           case (inferType gamma g, inferType gamma e)
             of (SOME Tbool, SOME Tunit) => SOME Tunit
-             | _ => NONE)
+             | _ => NONE
+      )
+
+      | inferType gamma (Par (l, r)) = (
+          case (inferType gamma l, inferType gamma r)
+            of (SOME Tunit, SOME Tunit) => SOME Tproc
+             | (SOME Tunit, SOME Tproc) => SOME Tproc
+             | (SOME Tproc, SOME Tunit) => SOME Tproc
+             | (SOME Tproc, SOME Tproc) => SOME Tproc
+             | _ => NONE   
+      )
+
+      | inferType gamma (Await (g, e)) = (
+          case (inferType gamma g, inferType gamma e)
+            of (SOME Tbool, SOME Tunit) => SOME Tunit
+             | _ => NONE
+      )
+
+      | inferType gamma (Choice (l, r)) = (
+          case (inferType gamma l, inferType gamma r)
+            of (SOME Tunit, SOME Tunit) => SOME Tunit
+             | _ => NONE
+      )
 
       | inferType gamma expr = NONE
 
