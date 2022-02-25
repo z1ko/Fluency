@@ -1,4 +1,7 @@
 
+load "Int";
+load "Bool";
+
 type sloc = string
 type svar = string
 
@@ -6,13 +9,13 @@ type svar = string
 type store = sloc * int list
 
 datatype Texp = Tfunc of Texp * Texp  
-              | Tref of Texp
+              | Tref  of Texp
               | Tunit 
               | Tbool 
               | Tint
 
 (* Tutte le operazioni conosciute *)
-datatype oper = Add | Sub | Eq
+datatype oper = Add | Eq
 
 (* Tutti i possibili costrutti del nostro linguaggio *)
 datatype expr = Boolean of bool
@@ -29,7 +32,7 @@ datatype expr = Boolean of bool
               | Skip
 
 (* Semplice interprete per il linguaggio *)
-structure Int = struct
+structure ExprInt = struct
 
     (* Indica che l'expressione è un valore *)
     fun value (Boolean b)     = true
@@ -55,6 +58,7 @@ structure Int = struct
       | substitute var repl Skip                = Skip
 
     (* Esegue un singolo step di computazione *)
+    (* fn: expr * ((string * int) list) -> (expr * (string * int) list) option) *)
     fun step (Boolean b,      store) = NONE
       | step (Integer n,      store) = NONE
       | step (Fn (t, x, e),   store) = NONE
@@ -122,6 +126,8 @@ structure Int = struct
                       of SOME (a', store') => SOME (App (a', b), store)
                        | NONE => NONE)
 
+      | step (expr, store) = NONE
+
 
     (* Valuta un'espressione con uno store fino a raggiungere un valore costante *)
     fun evalExpr (exp, store) =
@@ -133,6 +139,7 @@ end
 (* Controlla se l'espressione è ben tipata *)
 structure TypeChecker = struct
 
+    (* (string * Texp) list * expr -> Texp option *)
     fun inferType gamma (Integer n) = SOME Tint
       | inferType gamma (Boolean b) = SOME Tbool
       | inferType gamma (Skip)      = SOME Tunit
@@ -185,6 +192,8 @@ structure TypeChecker = struct
             of (SOME (Tfunc (t1, t2)), SOME t3) => if t1 = t3 then SOME t2 else NONE
              | _ => NONE)
 
+      | inferType gamma expr = NONE
+
 end
 
 (* Int.evalExpr (Seq(Assign("x", Integer 4), Op(Integer 1, Add, Deref "x")), [("x", 1)]); *)
@@ -192,18 +201,21 @@ end
 
 structure PrettyPrinter = struct
 
-  fun printOper Add = "+"
-    | printOper Eq  = "="
+  (* fn: op -> string *)
+  fun printOper Add   = "+"
+    | printOper Eq    = "="
 
-  fun printType (Tfunc (t1, t2)) = (printType t1) ^ " -> " ^ (printType t2)
-    | printType (Tref t)         = "ref " ^ (printType t)
-    | printType (Tunit)          = "unit"
-    | printType (Tbool)          = "bool"
-    | printType (Tint)           = "int"
+  (* fn: Texp -> string *)
+  fun printType (Tfunc (t1, t2))  = (printType t1) ^ " -> " ^ (printType t2)
+    | printType (Tref t)          = "ref " ^ (printType t)
+    | printType (Tunit)           = "unit"
+    | printType (Tbool)           = "bool"
+    | printType (Tint)            = "int"
 
+  (* fn: expr -> string *)
   fun printExpr (Skip)            = "skip"
-    | printExpr (Integer n)       = "0"     (* TODO *)
-    | printExpr (Boolean b)       = "True"  (* TODO *)
+    | printExpr (Integer n)       = (Int.toString n)
+    | printExpr (Boolean b)       = (Bool.toString b)
     | printExpr (Sym x)           = x
     | printExpr (Op (a, oper, b)) = "(" ^ (printExpr a) ^ " " ^ (printOper oper) ^ " " ^ (printExpr b) ^ ")"
     | printExpr (If (g, t, f))    = "if " ^  (printExpr g) ^ " then " ^ (printExpr t) ^ " else " ^ (printExpr f)
@@ -216,16 +228,42 @@ structure PrettyPrinter = struct
 
 end
 
+(* Dato uno store di semplici interi ritorna una gamma adatta *)
+fun generate_gamma [] result = result
+  | generate_gamma ((loc, _)::tail) result =
+      generate_gamma tail ((loc, Tref Tint)::result)
+
+(* Printa il contenuto dello store *)
+fun print_store [] = ()
+  | print_store ((loc, value)::tail) = (
+      print ("\t(" ^ loc ^ ", " ^ (Int.toString value) ^ ")\n");
+      print_store tail)
+
+(* Printa il contenuto di gamma *)
+fun print_gamma [] = ()
+  | print_gamma ((loc, ty)::tail) = (
+      print ("\t(" ^ loc ^ ", " ^ (PrettyPrinter.printType ty) ^ ")\n");
+      print_gamma tail)
 
 (* Funzione che accetta un'espressione, controlla se è tipabile, printa il suo tipo
  * ed in fine la visualizza in un formato comprensibile *)
-fun digest expr = (
-  print ("Espressione: " ^ PrettyPrinter.printExpr expr ^ "\n");
-  case TypeChecker.inferType [] expr
-    of NONE   =>  print "ERRORE: non è tipabile!\n"
-     | SOME t => (print ("Tipo dell'espressione: " ^ (PrettyPrinter.printType t) ^ "\n");
-                  let val (res, store) = Int.evalExpr (expr, []) in
-                    print ("Riduzione: " ^ (PrettyPrinter.printExpr res) ^ "\n")
-                  end))
+fun digest expr NONE = (digest expr (SOME []))
+  | digest expr (SOME store) = (
+      print ("Espressione: " ^ PrettyPrinter.printExpr expr ^ "\n");
+      let val gamma = generate_gamma store [] 
+      in
+        case TypeChecker.inferType gamma expr
+          of NONE    => print "ERRORE: non è tipabile!\n"
+           | SOME t  => (
+              print "Gamma:\n"; print_gamma gamma;
+              print "Store iniziale:\n"; print_store store;
+              print ("Tipo dell'espressione: " ^ (PrettyPrinter.printType t) ^ "\n");
+              let val (res, store) = ExprInt.evalExpr (expr, store) 
+              in
+                print "Store finale:\n"; print_store store;
+                print ("Riduzione: " ^ (PrettyPrinter.printExpr res) ^ "\n")
+              end)
+      end)
+
 
 (* digest (Op(Integer 5, Add, Boolean false)); *)
