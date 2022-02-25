@@ -1,6 +1,7 @@
 
 load "Int";
 load "Bool";
+load "Random";
 
 type sloc = string
 type svar = string
@@ -8,9 +9,9 @@ type svar = string
 (* Tutte le locazioni di memoria definite *)
 type store = sloc * int list
 
-datatype Texp = Tfunc of Texp * Texp  
-              | Tref  of Texp
+datatype Texp = Tref  of Texp
               | Tunit 
+              | Tproc
               | Tbool 
               | Tint
 
@@ -20,15 +21,15 @@ datatype oper = Add | Eq
 (* Tutti i possibili costrutti del nostro linguaggio *)
 datatype expr = Boolean of bool
               | Integer of int
-              | Fn      of Texp * svar * expr
-              | Sym     of svar
               | Op      of expr * oper * expr
               | If      of expr * expr * expr
               | Assign  of sloc * expr
               | While   of expr * expr
               | Seq     of expr * expr
-              | App     of expr * expr
               | Deref   of sloc
+              | Await   of expr * expr
+              | Par     of expr * expr
+              | Choice  of expr * expr
               | Skip
 
 (* Semplice interprete per il linguaggio *)
@@ -37,102 +38,129 @@ structure ExprInt = struct
     (* Indica che l'expressione è un valore *)
     fun value (Boolean b)     = true
       | value (Integer x)     = true
-      | value (Fn (t, v, f))  = true
-      | value (Sym x)         = true
       | value (Skip)          = true
       | value _               = false
 
-
-    (* Sostituisce l'espressione 'repl' con tutte le istanze di variabile 'var' in 'exp' *)
-    fun substitute var repl (Boolean b)         = Boolean b
-      | substitute var repl (Integer n)         = Integer n
-      | substitute var repl (Fn (t, x, e))      = Fn (t, x, substitute var repl e)
-      | substitute var repl (If (g, t, f))      = If (substitute var repl g, substitute var repl t, substitute var repl f)
-      | substitute var repl (Assign (loc, e))   = Assign (loc, substitute var repl e)
-      | substitute var repl (While (g, e))      = While (substitute var repl g, substitute var repl e)
-      | substitute var repl (Seq (a,b))         = Seq (substitute var repl a, substitute var repl b)
-      | substitute var repl (App (f, e))        = App (substitute var repl f, substitute var repl e)
-      | substitute var repl (Deref loc)         = Deref loc
-      | substitute var repl (Op (a, oper, b))   = Op (substitute var repl a, oper, substitute var repl b)
-      | substitute var repl (Sym x)             = if x = var then repl else (Sym x)
-      | substitute var repl Skip                = Skip
-
-    (* Esegue un singolo step di computazione *)
-    (* fn: expr * ((string * int) list) -> (expr * (string * int) list) option) *)
-    fun step (Boolean b,      store) = NONE
-      | step (Integer n,      store) = NONE
-      | step (Fn (t, x, e),   store) = NONE
-      | step (Sym x,          store) = NONE (* Se arriviamo a questo punto vuol dire che x è unbound! *)
-      | step (Skip,           store) = NONE
-
-      | step (Op (a, oper, b), store) = (
-          case (a, oper, b)
-            of (Integer a, Add, Integer b) => SOME (Integer (a + b), store)
-             | (Integer a,  Eq, Integer b) => SOME (Boolean (a = b), store)
-             | (a, oper, b) =>
-                  if value a then
-                    case step (b, store)
-                      of SOME (b', store') => SOME (Op (a, oper, b'), store')
-                       | NONE => NONE
-                  else
-                    case step (a, store)
-                      of SOME (a', store') => SOME (Op (a', oper, b), store')
-                       | NONE => NONE)
-
-      | step (If (g, t, f), store) = (
-          case g
-            of (Boolean True)  => SOME (t, store)
-             | (Boolean False) => SOME (f, store)
-             | g => case step (g, store)
-                      of SOME (g', store') => SOME (If (g', t, f), store)
-                       | NONE => NONE)
-
-      (* Accettiamo solo interi nelle locazioni *)
-      | step (Assign (loc, e), store) = (
-          case e
-            of (Integer n) => case Store.update store (loc, n)
-                                of SOME (store') => SOME (Skip, store')
-                                 | NONE => NONE
-             | _ => case step (e, store)
-                      of SOME (e', store') => SOME (Assign (loc, e'), store')
-                       | NONE => NONE)
-
-      | step (Deref loc, store) = (
-          case Store.read store loc 
-            of SOME value => SOME (Integer value, store)
-             | NONE => NONE)
-
-      | step (Seq (a, b), store) = (
-          case a
-            of Skip => SOME (b, store)
-             | _ => case step (a, store)
-                      of SOME (a', store') => SOME (Seq (a', b), store')
-                       | NONE => NONE)
-
-      | step (While (g, e), store) = 
-          SOME (If (g, Seq (e, While (g, e)), Skip), store) 
-    
-      (* Call By Value *)
-      | step (App (a, b), store) = (
-          case (a, b)
-            of (Fn (t, x, e), Integer n) => SOME (substitute x (Integer n) e, store)
-             | (a, b) => 
-                  if value a then
-                    case step (b, store) 
-                      of SOME (b', store') => SOME (App (a, b'), store)
-                       | NONE => NONE
-                  else
-                    case step (a, store)
-                      of SOME (a', store') => SOME (App (a', b), store)
-                       | NONE => NONE)
-
-      | step (expr, store) = NONE
-
-
     (* Valuta un'espressione con uno store fino a raggiungere un valore costante *)
-    fun evalExpr (exp, store) =
-        case step (exp, store) of SOME((exp', store')) => evalExpr (exp', store')
-            | NONE => (exp, store)
+    fun reduce (exp, store) = (
+
+          (* Esegue una regola di riduzione *)
+      let fun step (Boolean b,      store) = NONE
+            | step (Integer n,      store) = NONE
+            | step (Skip,           store) = NONE
+
+            (* Regole: Operazioni aritmeniche e booleane *)
+            | step (Op (a, oper, b), store) = (
+                case (a, oper, b)
+                  of (Integer a, Add, Integer b) => SOME (Integer (a + b), store)
+                   | (Integer a,  Eq, Integer b) => SOME (Boolean (a = b), store)
+                   | (a, oper, b) =>
+                        if value a then
+                          case step (b, store)
+                            of SOME (b', store') => SOME (Op (a, oper, b'), store')
+                             | NONE => NONE
+                        else
+                          case step (a, store)
+                            of SOME (a', store') => SOME (Op (a', oper, b), store')
+                             | NONE => NONE
+            )
+
+            (* Regole: If *)
+            | step (If (g, t, f), store) = (
+                case g
+                  of (Boolean true)  => SOME (t, store)
+                   | (Boolean false) => SOME (f, store)
+                   | g => 
+                    case step (g, store)
+                      of SOME (g', store') => SOME (If (g', t, f), store)
+                       | NONE => NONE
+            )
+          
+            (* Accettiamo solo interi nelle locazioni *)
+            | step (Assign (loc, e), store) = (
+                case e
+                  of (Integer n) => 
+                    case Store.update store (loc, n)
+                      of SOME (store') => SOME (Skip, store')
+                       | NONE => NONE
+                   | _ => 
+                    case step (e, store)
+                      of SOME (e', store') => SOME (Assign (loc, e'), store')
+                       | NONE => NONE
+            )
+
+            | step (Deref loc, store) = (
+                case Store.read store loc 
+                  of SOME value => SOME (Integer value, store)
+                   | NONE => NONE
+            )
+
+            | step (Seq (a, b), store) = (
+                case a
+                  of Skip => SOME (b, store)
+                   | _ => 
+                    case step (a, store)
+                      of SOME (a', store') => SOME (Seq (a', b), store')
+                       | NONE => NONE
+            )
+
+            | step (While (g, e), store) = 
+                SOME (If (g, Seq (e, While (g, e)), Skip), store) 
+          
+            (* Regole: ParL - ParR - endL - endR *)
+            | step (Par (l, r), store) = (
+                case (l, r)
+                  of (Skip, r) => SOME (r, store)
+                   | (l, Skip) => SOME (l, store)
+                   | _ => 
+                    case (step (l, store), step (r, store))
+                      of (SOME (l', lstore), NONE) => SOME (Par (l', r), lstore)
+                       | (NONE, SOME (r', rstore)) => SOME (Par (l, r'), rstore) 
+                       | (SOME (l', lstore), SOME (r', rstore)) => (
+                        case Random.range (0, 2) (Random.newgen ()) (* Sceglie a caso *)
+                          of 0 => SOME (Par (l', r), lstore)
+                           | _ => SOME (Par (l, r'), rstore)
+                        )
+                       | _ => NONE
+            )
+
+            (* Regole: ChoiceL - ChoiceR *)
+            | step (Choice (l, r), store) = (
+                case (step (l, store), step (r, store))
+                  of (SOME (l', lstore), NONE) => SOME (l', lstore)
+                   | (NONE, SOME (r', rstore)) => SOME (r', rstore) 
+                   | (SOME (l', lstore), SOME (r', rstore)) => (
+                    case Random.range (0, 2) (Random.newgen ()) (* Sceglie a caso una delle due strade *)
+                      of 0 => SOME (l', lstore)
+                       | _ => SOME (r', rstore)
+                    )
+                   | _ => NONE
+            )
+
+            (* Regole: Await *)
+            | step (Await (g, e), store) = (
+                case g 
+                  of (Boolean false) => NONE
+                   | (Boolean true)  => (
+                    case eval (e, store) (* Esegue tutto il corpo in un colpo solo *) 
+                      of (Skip, store') => SOME (Skip, store')
+                       | _ => NONE)
+                   | g => (
+                    case step (g, store) (* Esegue la guardia *)
+                      of SOME (g', store') => SOME (Await (g', e), store')
+                       | NONE => NONE)
+            )
+
+            (* Irriducibile *)
+            | step (expr, store) = NONE
+
+          (* Continua a ridurre ad applicare le regole di riduzione *)
+          and eval (expr, store) = case step (expr, store) of SOME (expr', store') => eval (expr', store')
+                                                            | NONE => (expr, store)
+      in
+        eval (exp, store)
+      end
+    )
 
 end
 
@@ -175,23 +203,6 @@ structure TypeChecker = struct
             of (SOME Tbool, SOME Tunit) => SOME Tunit
              | _ => NONE)
 
-      | inferType gamma (Fn (t, x, e)) = (
-          let val gamma' = Store.insert gamma (x, t) in
-            case inferType gamma' e
-              of SOME t1 => SOME (Tfunc (t, t1))
-               | NONE => NONE
-          end)
-
-      | inferType gamma (Sym x) = (
-          case Store.read gamma x
-            of SOME t => SOME t
-             | NONE => NONE)
-      
-      | inferType gamma (App (f, b)) = (
-          case (inferType gamma f, inferType gamma b)
-            of (SOME (Tfunc (t1, t2)), SOME t3) => if t1 = t3 then SOME t2 else NONE
-             | _ => NONE)
-
       | inferType gamma expr = NONE
 
 end
@@ -206,25 +217,25 @@ structure PrettyPrinter = struct
     | printOper Eq    = "="
 
   (* fn: Texp -> string *)
-  fun printType (Tfunc (t1, t2))  = (printType t1) ^ " -> " ^ (printType t2)
-    | printType (Tref t)          = "ref " ^ (printType t)
-    | printType (Tunit)           = "unit"
-    | printType (Tbool)           = "bool"
-    | printType (Tint)            = "int"
+  fun printType (Tref t) = "ref " ^ (printType t)
+    | printType (Tunit)  = "unit"
+    | printType (Tbool)  = "bool"
+    | printType (Tint)   = "int"
+    | printType (Tproc)  = "proc"
 
   (* fn: expr -> string *)
   fun printExpr (Skip)            = "skip"
     | printExpr (Integer n)       = (Int.toString n)
     | printExpr (Boolean b)       = (Bool.toString b)
-    | printExpr (Sym x)           = x
     | printExpr (Op (a, oper, b)) = "(" ^ (printExpr a) ^ " " ^ (printOper oper) ^ " " ^ (printExpr b) ^ ")"
     | printExpr (If (g, t, f))    = "if " ^  (printExpr g) ^ " then " ^ (printExpr t) ^ " else " ^ (printExpr f)
     | printExpr (Deref x)         = "!" ^ x
     | printExpr (Assign (loc, n)) = loc ^ " := " ^ (printExpr n)
     | printExpr (Seq (a, b))      = (printExpr a) ^ "; " ^ (printExpr b)
     | printExpr (While (g, e))    = "while " ^ (printExpr g) ^ " do " ^ (printExpr e)
-    | printExpr (Fn (t, x, e))    = "fn " ^ x ^ ": " ^ (printType t) ^ " => " ^ (printExpr e)
-    | printExpr (App (a, b))      = "(" ^ (printExpr a) ^ ") " ^ (printExpr b)
+    | printExpr (Par (l, r))      = (printExpr l) ^ " || " ^ (printExpr r)
+    | printExpr (Choice (l, r))   = (printExpr l) ^ " Y " ^ (printExpr r)
+    | printExpr (Await (g, e))    = "await " ^ (printExpr g) ^ " protect " ^ (printExpr e) ^ " end"
 
 end
 
@@ -247,6 +258,7 @@ fun print_gamma [] = ()
 
 (* Funzione che accetta un'espressione, controlla se è tipabile, printa il suo tipo
  * ed in fine la visualizza in un formato comprensibile *)
+
 fun digest expr NONE = (digest expr (SOME []))
   | digest expr (SOME store) = (
       print ("Espressione: " ^ PrettyPrinter.printExpr expr ^ "\n");
@@ -258,7 +270,7 @@ fun digest expr NONE = (digest expr (SOME []))
               print "Gamma:\n"; print_gamma gamma;
               print "Store iniziale:\n"; print_store store;
               print ("Tipo dell'espressione: " ^ (PrettyPrinter.printType t) ^ "\n");
-              let val (res, store) = ExprInt.evalExpr (expr, store) 
+              let val (res, store) = ExprInt.reduce (expr, store) 
               in
                 print "Store finale:\n"; print_store store;
                 print ("Riduzione: " ^ (PrettyPrinter.printExpr res) ^ "\n")
@@ -266,4 +278,15 @@ fun digest expr NONE = (digest expr (SOME []))
       end)
 
 
-(* digest (Op(Integer 5, Add, Boolean false)); *)
+(* PARALLELO *)
+(* ExprInt.reduce (Par (Op (Integer 1, Add, Integer 1), Op (Integer 2, Add, Integer 2)), []); *)
+(* ExprInt.reduce (Par (Assign ("x", Integer 0), Op (Integer 2, Add, Integer 2)), [("x", 10)]); *)
+(* ExprInt.reduce (Par (Assign ("x", Integer 0), Assign("x", Integer 5)), [("x", 10)]); *)
+
+(* NON-DET *)
+(* ExprInt.reduce (Choice (Op (Integer 1, Add, Integer 1), Op (Integer 2, Add, Integer 2)), []); *)
+
+(* AWAIT *)
+(* ExprInt.reduce (Assign ("x", Integer 10), [("x", 0)]); *)
+(* ExprInt.reduce (Await (Boolean true, Assign ("x", Integer 0)), [("x", 10)]); *)
+(* ExprInt.reduce (Await (Boolean false, Assign ("x", Integer 0)), [("x", 10)]); *)
