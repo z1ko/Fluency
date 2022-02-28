@@ -90,16 +90,6 @@ structure ExprInt = struct
                   case step (e, store)
                       of SOME (e', store') => SOME (Assign (loc, e'), store')
                        | NONE => NONE
-                (*
-                case e
-                  of (Integer n) => (* Accettiamo solo interi nelle locazioni *)
-                    case Store.update store (loc, n)
-                      of SOME (store') => SOME (Skip, store')
-                       | NONE => NONE
-                   | _ =>
-                    case step (e, store)
-                      of SOME (e', store') => SOME (Assign (loc, e'), store')
-                       | NONE => NONE *)
             )
 
             (* Dereferenziazione *)
@@ -165,9 +155,6 @@ structure ExprInt = struct
                       of SOME (g', store') => SOME (Await (g', e), store')
                        | NONE => NONE)
             )
-
-            (* Impossibile *)
-            | step (expr, store) = NONE
 
           (* Continua ad applicare le regole di riduzione *)
           and eval (expr, store) = case step (expr, store) 
@@ -252,10 +239,6 @@ structure TypeChecker = struct
             of (SOME Tunit, SOME Tunit) => SOME Tunit
              | _ => NONE
       )
-
-      (* Impossibile *)
-      | inferType gamma expr = NONE
-
 end
 
 (* Int.evalExpr (Seq(Assign("x", Integer 4), Op(Integer 1, Add, Deref "x")), [("x", 1)]); *)

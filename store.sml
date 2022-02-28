@@ -16,18 +16,4 @@ structure Store = struct
     (* Aggiorna un valore dello store, ritorna una copia *)
     fun update store (loc, value) = update_iterator [] store (loc, value)
 
-    (* Aggiunge una nuova locazione *)
-    fun insert store (loc, value) = ((loc, value)::store)
-
-    (* Controlla una singola coppia dello store e possibilmente la rimuove*)
-    fun remove_iterator front [] loc = NONE
-      | remove_iterator front ((loc', value')::tail) loc =
-          if loc' = loc then SOME (front @ tail)
-          else remove_iterator ((loc', value')::front) tail loc
-
-    (* Rimuove un valore dallo store*)
-    fun remove store loc = remove_iterator [] store loc
-
 end
-
-(* Store.read (Option.getOpt ((Store.update (Store.insert [] ("x", 5)) ("x", 0)), [])) "x"; *)
