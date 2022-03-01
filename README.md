@@ -4,7 +4,7 @@ An interpreter, type-checker and pretty-printer for a simple language, written i
 ## Usage
 To execute arbitrary commands in the interactive enviroment use the following:
 ```
-mosml store.sml eval.sml
+mosml eval.sml
 ```
 
 Four structures of functions are defined:
