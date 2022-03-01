@@ -173,16 +173,32 @@ structure ExprInt = struct
                   case l (* Esegue a sinistra *)
                     of Skip => SOME (r, store) (* End Left  *)
                      | _ => (
-                        case step (l, store) (* Par Left *)
-                          of SOME (l', store') => SOME (Par (l', r), store')
-                           | NONE => SOME (Par (l, r), store)))
+                        case step (l, store)
+                          of SOME (l', store') => SOME (Par (l', r), store') (* Par Left *)
+                           | NONE => ( (* Esegue a destra *)
+                            case r 
+                              of Skip => SOME (l, store) (* End Right *)
+                               | _ => (
+                                 case step (r, store)
+                                   of SOME (r', store') => SOME (Par (l, r'), store') (* Par Right *)
+                                    | NONE => NONE))
+                     )
+                 )
                  | _ => (
                   case r (* Esegue a destra   *)
                     of Skip => SOME (l, store) (* End Right *)
                      | _ => (
-                        case step (r, store) (* Par Right *)
-                          of SOME (r', store') => SOME (Par (l, r'), store')
-                           | NONE => SOME (Par (l, r), store)))
+                        case step (r, store)
+                          of SOME (r', store') => SOME (Par (l, r'), store') (* Par Right *)
+                           | NONE => (
+                             case l
+                               of Skip => SOME (r, store) (* End Left  *)
+                                | _ => (
+                                  case step (l, store)
+                                    of SOME (l', store') => SOME (Par (l', r), store') (* Par Left  *)
+                                     | NONE => NONE))
+                     )
+                 )
             )
 
             (* Scelta Non Deterministica: ChoiceL - ChoiceR *)
